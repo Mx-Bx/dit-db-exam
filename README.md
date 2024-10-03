@@ -50,12 +50,6 @@ kubectl apply -f rwo-pvc.yaml
 kubectl apply -f test-pvc-pod.yaml
 ```
 
-Créez le répertoire pour Spark et assurez-vous qu'il a les bonnes permissions :
-
-```bash
-mkdir -p /opt/spark/check_point && chmod 777 /opt/spark/check_point
-```
-
 Vérifiez l'état des pods système pour vous assurer que tous les composants sont en place :
 
 ```bash
