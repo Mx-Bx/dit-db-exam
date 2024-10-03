@@ -35,6 +35,8 @@ First, create a dedicated namespace for this project:
 ```bash
 kubectl apply -f namespace.yaml
 
+kubectl apply -f local-path-storageclass.yaml
+
 kubectl apply -f pod-access-role.yaml
 
 kubectl apply -f pod-exec-role.yaml
@@ -45,10 +47,15 @@ kubectl apply -f spark-role.yaml
 
 kubectl apply -f spark-rolebinding.yaml
 
-./launch-spark-job.sh
+kubectl apply -f rwo-pvc.yaml
 
+kubectl apply -f test-pvc-pod.yaml
 
 mkdir -p /opt/spark/check_point  && chmod 777 /opt/spark/check_point
+
+kubectl get pods -n kube-system
+kubectl rollout restart deployment coredns -n kube-system
+
 ```
 
 This will create a `data-pipeline` namespace where all services will run.
@@ -58,8 +65,8 @@ This will create a `data-pipeline` namespace where all services will run.
 Deploy the PostgreSQL and Redis services, which are required for Airflow:
 
 ```bash
-kubectl apply -f postgres.yaml
-kubectl apply -f redis.yaml
+kubectl apply -f deployment/postgres.yaml
+kubectl apply -f deployment/redis.yaml
 ```
 
 ### 4. Deploy Airflow
@@ -182,6 +189,8 @@ kubectl apply -f src/spark-submit-job.yaml
 ## Step 4: Automating Dependencies Using a Kubernetes CronJob
 
 ```bash
+./launch-spark-job.sh
+
 chmod +x run-all-jobs.sh
 ./run-all-jobs.sh
 ```
