@@ -1,62 +1,70 @@
-apiVersion: batch/v1
-kind: Job
+apiVersion: v1
+kind: Pod
 metadata:
-  name: run-spark-job
+  name: spark-submit-job
   namespace: data-pipeline
 spec:
-  template:
-    spec:
-      containers:
-      - name: run-spark-job
-        image: barryma22/spark-k8s
-        imagePullPolicy: Always
-        command:
-          - /bin/bash
-          - -c
-          - |
-            echo "Sleeping to wait for Spark master to be ready...";
-            sleep 10;
-
-            echo "Listing all pods in namespace...";
-            kubectl get pods -n data-pipeline;
-
-            echo "Finding the Spark master pod...";
-            MASTER_POD=$(kubectl get pods -n data-pipeline -l app=spark,role=master -o jsonpath="{.items[0].metadata.name}");
-            
-            echo "Found master pod: $MASTER_POD";
-
-            echo "Running Spark job from master pod...";
-            # /opt/spark/bin/spark-submit \
-            #   --master spark://spark-master.data-pipeline.svc.cluster.local:7077 \
-            #   --deploy-mode client \
-            #   --conf "spark.jars.ivy=/tmp/.ivy2" \
-            #   --conf "spark.local.dir=/tmp/spark" \
-            #   --conf spark.kubernetes.container.image=docker/barryma22/spark-k8s \
-            #   --conf spark.kubernetes.authenticate.caCertFile="" \
-            #   --conf spark.kubernetes.namespace=data-pipeline \
-            #   --conf spark.kubernetes.authenticate.driver.serviceAccountName=spark \
-            #   --conf spark.kubernetes.authenticate.oauthToken="" \
-            #   --conf spark.kubernetes.authenticate.submission.caCertFile="" \
-            #   --conf spark.cassandra.auth.username=cassandra \
-            #   --conf spark.cassandra.auth.password=cassandra \
-            #   --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.1.3,com.datastax.spark:spark-cassandra-connector_2.12:3.1.0,com.github.jnr:jnr-ffi:2.1.15,com.github.jnr:jnr-posix:3.1.11 \
-            #   --jars /tmp/.ivy2/jars/org.apache.spark_spark-sql-kafka-0-10_2.12-3.1.3.jar,/tmp/.ivy2/jars/com.datastax.spark_spark-cassandra-connector_2.12-3.1.0.jar \
-            #   /opt/spark/spark_streaming.py;
-
-            /opt/spark/bin/spark-submit \
-              --master spark://spark-master.data-pipeline.svc.cluster.local:7077 \
-              --deploy-mode client \
-              --conf "spark.jars.ivy=/tmp/.ivy2" \
-              --conf "spark.local.dir=/tmp/spark" \
-              --conf spark.kubernetes.container.image=docker/barryma22/spark-k8s \
-              --conf spark.kubernetes.namespace=data-pipeline \
-              --conf spark.kubernetes.authenticate.driver.serviceAccountName=spark \
-              --conf spark.cassandra.auth.username=cassandra \
-              --conf spark.cassandra.auth.password=cassandra \
-              --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.1.3,com.datastax.spark:spark-cassandra-connector_2.12:3.1.0,com.github.jnr:jnr-ffi:2.1.15,com.github.jnr:jnr-posix:3.1.11 \
-              /opt/spark/spark_streaming.py
-
-
-            echo "Spark job execution completed!";
-      restartPolicy: Never
-  backoffLimit: 2
+  serviceAccountName: spark
+  containers:
+    - name: spark-submit
+      image: spark:spark-kb8
+      imagePullPolicy: IfNotPresent
+      command: ["/opt/spark/bin/spark-submit"]
+      args:
+        - --master
+        - "k8s://https://127.0.0.1:34803"
+        - --deploy-mode
+        - cluster
+        - --conf
+        - "spark.executor.instances=1"
+        - --conf
+        - "spark.kubernetes.namespace=data-pipeline"
+        - --conf
+        - "spark.kubernetes.authenticate.driver.serviceAccountName=spark"
+        - --conf
+        - "spark.kubernetes.container.image=spark:spark-kb8"
+        - --conf
+        - "spark.kubernetes.container.image.pullPolicy=IfNotPresent"
+        - --conf
+        - "spark.driver.memory=2g"
+        - --conf
+        - "spark.executor.memory=2g"
+        - --conf
+        - "spark.kubernetes.driver.volumes.persistentVolumeClaim.single-access-pvc.mount.path=/mnt/data"
+        - --conf
+        - "spark.kubernetes.driver.volumes.persistentVolumeClaim.single-access-pvc.mount.readOnly=false"
+        - --conf
+        - "spark.kubernetes.driver.volumes.persistentVolumeClaim.single-access-pvc.options.claimName=single-access-pvc"
+        - --conf
+        - "spark.kubernetes.executor.volumes.persistentVolumeClaim.single-access-pvc.mount.path=/mnt/data"
+        - --conf
+        - "spark.kubernetes.executor.volumes.persistentVolumeClaim.single-access-pvc.mount.readOnly=false"
+        - --conf
+        - "spark.kubernetes.executor.volumes.persistentVolumeClaim.single-access-pvc.options.claimName=single-access-pvc"
+        - --conf
+        - "spark.kubernetes.driver.volumes.emptyDir.ivy-cache.mount.path=/opt/spark/.ivy2"
+        - --conf
+        - "spark.kubernetes.driver.volumes.emptyDir.ivy-cache.mount.readOnly=false"
+        - --conf
+        - "spark.kubernetes.executor.volumes.emptyDir.ivy-cache.mount.path=/opt/spark/.ivy2"
+        - --conf
+        - "spark.kubernetes.executor.volumes.emptyDir.ivy-cache.mount.readOnly=false"
+        - --conf
+        - "spark.cassandra.auth.username=cassandra"
+        - --conf
+        - "spark.cassandra.auth.password=cassandra"
+        - --packages
+        - "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.2,com.datastax.spark:spark-cassandra-connector_2.12:3.5.1,com.github.jnr:jnr-posix:3.1.15"
+        - "local:///mnt/data/spark-data/upload-dir/spark_streaming.py"
+      volumeMounts:
+        - name: single-access-pvc
+          mountPath: /mnt/data
+        - name: ivy-cache
+          mountPath: /opt/spark/.ivy2
+  volumes:
+    - name: single-access-pvc
+      persistentVolumeClaim:
+        claimName: single-access-pvc
+    - name: ivy-cache
+      emptyDir: {}
+  restartPolicy: Never
