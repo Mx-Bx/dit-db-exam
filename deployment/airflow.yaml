@@ -1,0 +1,319 @@
+# airflow.yaml
+
+# 1. ConfigMap for Airflow Environment Variables
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: airflow-config
+  namespace: data-pipeline
+data:
+  AIRFLOW__CORE__EXECUTOR: "CeleryExecutor"
+  AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: "postgresql+psycopg2://airflow:airflow@postgres/airflow"
+  AIRFLOW__CORE__FERNET_KEY: ""
+  AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+  AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+  AIRFLOW__API__AUTH_BACKENDS: "airflow.api.auth.backend.basic_auth"
+  AIRFLOW__CELERY__BROKER_URL: "redis://:@redis:6379/0"
+  AIRFLOW__CELERY__RESULT_BACKEND: "db+postgresql://airflow:airflow@postgres/airflow"
+  AIRFLOW__CORE__ALLOWED_DESERIALIZATION_CLASSES: "airflow.*,astro.*"
+
+# 2. PersistentVolumeClaim for Logs and DAGs
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: airflow-logs-pvc
+  namespace: data-pipeline
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: airflow-dags-pvc
+  namespace: data-pipeline
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+
+# 3. Init Job for Airflow Database Initialization
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: airflow-init
+  namespace: data-pipeline
+  labels:
+    app: airflow
+spec:
+  template:
+    metadata:
+      labels:
+        app: airflow
+    spec:
+      containers:
+        - name: airflow-init
+          image: barryma22/airflow:2.4.2-python3.10
+          command: ["airflow", "db", "init"]
+          envFrom:
+            - configMapRef:
+                name: airflow-config
+      restartPolicy: Never
+  backoffLimit: 4
+
+# 4. Deployment for Airflow Webserver with Admin User Creation
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: airflow-webserver
+  namespace: data-pipeline
+  labels:
+    app: airflow
+    component: webserver
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: airflow
+      component: webserver
+  template:
+    metadata:
+      labels:
+        app: airflow
+        component: webserver
+    spec:
+      initContainers:
+        - name: check-db-init
+          image: bitnami/kubectl:latest
+          command:
+            - /bin/sh
+            - -c
+            - |
+              while [[ $(kubectl get job airflow-init -n data-pipeline -o jsonpath='{.status.succeeded}') != "1" ]]; do
+                echo "Waiting for airflow-init job to complete..."
+                sleep 2
+              done
+        - name: create-admin-user
+          image: barryma22/airflow:2.4.2-python3.10
+          command:
+            - /bin/bash
+            - -c
+            - |
+              airflow users create \
+              --username admin \
+              --firstname Admin \
+              --lastname User \
+              --role Admin \
+              --email admin@example.com \
+              --password admin
+          envFrom:
+            - configMapRef:
+                name: airflow-config
+      containers:
+        - name: airflow-webserver
+          image: barryma22/airflow:2.4.2-python3.10
+          command: ["airflow", "webserver"]
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: airflow-config
+          volumeMounts:
+            - name: airflow-logs
+              mountPath: /opt/airflow/logs
+            - name: airflow-dags
+              mountPath: /opt/airflow/dags
+      volumes:
+        - name: airflow-logs
+          persistentVolumeClaim:
+            claimName: airflow-logs-pvc
+        - name: airflow-dags
+          persistentVolumeClaim:
+            claimName: airflow-dags-pvc
+
+# 5. Service for Airflow Webserver
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: airflow-webserver
+  namespace: data-pipeline
+spec:
+  selector:
+    app: airflow
+    component: webserver
+  ports:
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP
+
+# 6. Deployment for Airflow Scheduler
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: airflow-scheduler
+  namespace: data-pipeline
+  labels:
+    app: airflow
+    component: scheduler
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: airflow
+      component: scheduler
+  template:
+    metadata:
+      labels:
+        app: airflow
+        component: scheduler
+    spec:
+      initContainers:
+        - name: check-db-init
+          image: bitnami/kubectl:latest
+          command:
+            - /bin/sh
+            - -c
+            - |
+              while [[ $(kubectl get job airflow-init -n data-pipeline -o jsonpath='{.status.succeeded}') != "1" ]]; do
+                echo "Waiting for airflow-init job to complete..."
+                sleep 2
+              done
+      containers:
+        - name: airflow-scheduler
+          image: barryma22/airflow:2.4.2-python3.10
+          command: ["airflow", "scheduler"]
+          envFrom:
+            - configMapRef:
+                name: airflow-config
+          volumeMounts:
+            - name: airflow-logs
+              mountPath: /opt/airflow/logs
+            - name: airflow-dags
+              mountPath: /opt/airflow/dags
+      volumes:
+        - name: airflow-logs
+          persistentVolumeClaim:
+            claimName: airflow-logs-pvc
+        - name: airflow-dags
+          persistentVolumeClaim:
+            claimName: airflow-dags-pvc
+
+# 7. Deployment for Airflow Worker
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: airflow-worker
+  namespace: data-pipeline
+  labels:
+    app: airflow
+    component: worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: airflow
+      component: worker
+  template:
+    metadata:
+      labels:
+        app: airflow
+        component: worker
+    spec:
+      initContainers:
+        - name: check-db-init
+          image: bitnami/kubectl:latest
+          command:
+            - /bin/sh
+            - -c
+            - |
+              while [[ $(kubectl get job airflow-init -n data-pipeline -o jsonpath='{.status.succeeded}') != "1" ]]; do
+                echo "Waiting for airflow-init job to complete..."
+                sleep 2
+              done
+      containers:
+        - name: airflow-worker
+          image: barryma22/airflow:2.4.2-python3.10
+          command: ["airflow", "celery", "worker"]
+          envFrom:
+            - configMapRef:
+                name: airflow-config
+          volumeMounts:
+            - name: airflow-logs
+              mountPath: /opt/airflow/logs
+            - name: airflow-dags
+              mountPath: /opt/airflow/dags
+      volumes:
+        - name: airflow-logs
+          persistentVolumeClaim:
+            claimName: airflow-logs-pvc
+        - name: airflow-dags
+          persistentVolumeClaim:
+            claimName: airflow-dags-pvc
+
+# 8. Flower UI Deployment and Service
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: airflow-flower
+  namespace: data-pipeline
+  labels:
+    app: airflow
+    component: flower
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: airflow
+      component: flower
+  template:
+    metadata:
+      labels:
+        app: airflow
+        component: flower
+    spec:
+      initContainers:
+        - name: check-db-init
+          image: bitnami/kubectl:latest
+          command:
+            - /bin/sh
+            - -c
+            - |
+              while [[ $(kubectl get job airflow-init -n data-pipeline -o jsonpath='{.status.succeeded}') != "1" ]]; do
+                echo "Waiting for airflow-init job to complete..."
+                sleep 2
+              done
+      containers:
+        - name: airflow-flower
+          image: barryma22/airflow:2.4.2-python3.10
+          command: ["airflow", "celery", "flower"]
+          ports:
+            - containerPort: 5555
+          envFrom:
+            - configMapRef:
+                name: airflow-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: airflow-flower
+  namespace: data-pipeline
+spec:
+  selector:
+    app: airflow
+    component: flower
+  ports:
+    - port: 5555
+      targetPort: 5555
+      protocol: TCP

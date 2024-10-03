@@ -1,0 +1,7 @@
+requests==2.27.1
+json5==0.9.6
+pyspark==3.4.1
+Faker==13.15.0  # Specify version for compatibility
+kafka-python==2.0.2
+apache-airflow-providers-apache-spark==3.0.0  # Airflow Spark integration
+apache-airflow-providers-apache-cassandra==2.1.0  # Airflow Cassandra integration

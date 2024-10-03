@@ -1,0 +1,43 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: copy-spark-script
+  namespace: data-pipeline
+spec:
+  template:
+    spec:
+      containers:
+      - name: copy-spark-script
+        image: bitnami/kubectl:latest
+        command:
+          - /bin/bash
+          - -c
+          - |
+            echo "Sleeping to wait for Spark master to be ready...";
+            sleep 10;
+
+            echo "Listing all pods in namespace...";
+            kubectl get pods -n data-pipeline;
+
+            echo "Finding the Spark master pod...";
+            MASTER_POD=$(kubectl get pods -n data-pipeline -l app=spark,role=master -o jsonpath="{.items[0].metadata.name}");
+            
+            echo "Found master pod: $MASTER_POD";
+            
+            echo "Copying script to Spark master...";
+            kubectl cp /mnt/spark_streaming.py data-pipeline/$MASTER_POD:/opt/bitnami/spark/spark_streaming.py;
+
+            echo "Copy completed!";
+        volumeMounts:
+          - name: script-volume
+            mountPath: /mnt
+      restartPolicy: Never
+      volumes:
+      - name: script-volume
+        configMap:
+            name: spark-script-config
+        # hostPath:
+        #   path: scripts/spark_streaming.py
+        #   type: File
+  backoffLimit: 2
+

@@ -1,0 +1,69 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: copy-airflow-scripts
+  namespace: data-pipeline
+spec:
+  template:
+    spec:
+      containers:
+      - name: copy-airflow-scripts
+        image: bitnami/kubectl:latest
+        command:
+          - /bin/bash
+          - -c
+          - |
+            NAMESPACE="data-pipeline"
+            LABEL_SELECTOR="app=airflow,component=webserver"
+            DESTINATION_PATH="/opt/airflow/dags/"
+
+            echo "Sleeping for 5 seconds to ensure ConfigMap mount...";
+            sleep 5;
+
+            echo "Listing files in /mnt to verify presence...";
+            ls -l /mnt || { echo "Error: No files found in /mnt."; exit 1; }
+
+            echo "Waiting for Airflow Webserver pod to be ready...";
+            kubectl wait --for=condition=ready pod -n $NAMESPACE -l $LABEL_SELECTOR --timeout=180s || {
+              echo "Error: Airflow Webserver pod did not become ready in time.";
+              exit 1;
+            }
+
+            echo "Finding the Airflow Webserver pod...";
+            WEBSERVER_POD=$(kubectl get pods -n $NAMESPACE -l $LABEL_SELECTOR -o jsonpath="{.items[0].metadata.name}");
+
+            if [ -z "$WEBSERVER_POD" ]; then
+              echo "Error: No Airflow Webserver pod found!";
+              exit 1;
+            fi
+
+            echo "Found webserver pod: $WEBSERVER_POD";
+
+            echo "Verifying the destination directory on the Airflow Webserver...";
+            kubectl exec -n $NAMESPACE $WEBSERVER_POD -- mkdir -p $DESTINATION_PATH || {
+              echo "Error: Could not create destination directory!";
+              exit 1;
+            }
+
+            echo "Resolving symbolic links to actual file paths...";
+            REAL_PATHS=$(find /mnt -type f -exec readlink -f {} \;)
+
+            echo "Copying each script to Airflow Webserver individually...";
+            for FILE_PATH in $REAL_PATHS; do
+              echo "Copying $FILE_PATH to $WEBSERVER_POD:$DESTINATION_PATH";
+              kubectl cp $FILE_PATH $NAMESPACE/$WEBSERVER_POD:$DESTINATION_PATH || {
+                echo "Error: Copy failed for $FILE_PATH!";
+                exit 1;
+              }
+            done
+
+            echo "All scripts copied successfully!";
+        volumeMounts:
+          - name: scripts-volume
+            mountPath: /mnt
+      restartPolicy: Never
+      volumes:
+      - name: scripts-volume
+        configMap:
+          name: airflow-scripts
+  backoffLimit: 2

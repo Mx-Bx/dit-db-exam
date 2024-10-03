@@ -1,0 +1,250 @@
+# k8s/spark.yaml
+
+# 1. ConfigMap for Spark Environment Variables
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spark-config
+  namespace: data-pipeline
+data:
+  SPARK_MODE: "master"
+  SPARK_RPC_AUTHENTICATION_ENABLED: "no"
+  SPARK_RPC_ENCRYPTION_ENABLED: "no"
+  SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED: "no"
+  SPARK_SSL_ENABLED: "no"
+  SPARK_USER: "root"
+  HADOOP_USER_NAME: "root"
+  SPARK_PORT_MAXRETRIES: "5"  # Limit port retries to 5 to avoid endless attempts
+  spark.hadoop.security.authentication: "simple"
+
+# 2. PersistentVolumeClaim for Spark Data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: spark-pvc
+  namespace: data-pipeline
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+
+# 3. Service Account (Optional)
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: spark-service-account
+  namespace: data-pipeline
+
+# 4. Spark Master Deployment
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spark-master
+  namespace: data-pipeline
+  labels:
+    app: spark
+    role: master
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: spark
+      role: master
+  template:
+    metadata:
+      labels:
+        app: spark
+        role: master
+    spec:
+      serviceAccountName: spark-service-account
+      containers:
+        - name: spark-master
+          image: bitnami/spark:3.1.3
+          #image: barryma22/spark-k8s
+          command: ["/opt/bitnami/scripts/spark/run.sh"]
+          args: ["master"]
+          ports:
+            - containerPort: 7077  # Spark master port
+              name: spark-master
+            - containerPort: 8080  # Spark UI port
+              name: spark-ui
+          env:
+            - name: SPARK_MASTER_HOST
+              value: "0.0.0.0"  # Bind to all interfaces
+            - name: SPARK_MASTER_PORT
+              value: "7077"
+            - name: SPARK_USER
+              value: "root"
+            - name: HADOOP_USER_NAME
+              value: "root"
+            - name: spark.hadoop.security.authentication
+              value: "simple"
+            - name: SPARK_PORT_MAXRETRIES
+              value: "50"  # Increase retries for port binding
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "2Gi"
+              cpu: "1"
+          volumeMounts:
+            - name: spark-storage
+              mountPath: /opt/bitnami/spark/data
+      volumes:
+        - name: spark-storage
+          persistentVolumeClaim:
+            claimName: spark-pvc
+
+# 5. Spark Master Service
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: spark-master
+  namespace: data-pipeline
+spec:
+  ports:
+    - port: 7077  # Spark Master Port
+      targetPort: 7077
+      protocol: TCP
+      name: spark-master
+    - port: 8080  # Spark UI Port
+      targetPort: 8080
+      protocol: TCP
+      name: spark-ui
+  selector:
+    app: spark
+    role: master
+
+# Spark Worker Deployment Configuration in k8s/spark.yaml
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spark-worker
+  namespace: data-pipeline
+  labels:
+    app: spark
+    role: worker
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: spark
+      role: worker
+  template:
+    metadata:
+      labels:
+        app: spark
+        role: worker
+    spec:
+      serviceAccountName: spark-service-account
+      containers:
+        - name: spark-worker
+          image: bitnami/spark:3.1.3
+          #image: barryma22/spark-k8s
+          command: ["/opt/bitnami/scripts/spark/run.sh"]
+          args: ["worker", "spark://spark-master:7077"]
+          ports:
+            - containerPort: 8081  # Spark Worker UI port
+              name: worker-ui
+          env:
+            - name: HADOOP_USER_NAME
+              value: "root"
+            - name: HADOOP_CONF_DIR
+              value: "/opt/bitnami/spark/conf"
+            - name: SPARK_USER
+              value: "root"
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Djavax.security.auth.useSubjectCredsOnly=false"
+            - name: SPARK_MODE
+              value: "worker"
+            - name: SPARK_MASTER_URL
+              value: "spark://spark-master:7077"
+            - name: SPARK_WORKER_CORES
+              value: "1"
+            - name: SPARK_WORKER_MEMORY
+              value: "1G"
+            - name: SPARK_WORKER_PORT
+              value: "7078"  # Explicitly set worker port to avoid conflicts
+            - name: SPARK_WORKER_WEBUI_PORT
+              value: "8081"  # Explicitly setting the web UI port
+            - name: SPARK_LOCAL_IP
+              value: "0.0.0.0"
+            - name: spark.hadoop.security.authentication
+              value: "simple"
+            - name: spark.hadoop.security.authorization
+              value: "false"
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "2Gi"
+              cpu: "1"
+          volumeMounts:
+            - name: spark-storage
+              mountPath: /opt/bitnami/spark/data
+      volumes:
+        - name: spark-storage
+          persistentVolumeClaim:
+            claimName: spark-pvc
+
+# 7. Spark Worker Service (for Monitoring)
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: spark-worker
+  namespace: data-pipeline
+spec:
+  ports:
+    - port: 8081  # Spark Worker UI Port
+      targetPort: 8081
+      protocol: TCP
+      name: worker-ui
+  selector:
+    app: spark
+    role: worker
+
+# 8. Optional Headless Service for Spark Master (for internal communication)
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: spark-master-headless
+  namespace: data-pipeline
+spec:
+  clusterIP: None
+  ports:
+    - port: 7077
+      targetPort: 7077
+      protocol: TCP
+      name: spark-master
+  selector:
+    app: spark
+    role: master
+
+# 9. Optional Headless Service for Spark Workers (for internal communication)
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: spark-worker-headless
+  namespace: data-pipeline
+spec:
+  clusterIP: None
+  ports:
+    - port: 8081
+      targetPort: 8081
+      protocol: TCP
+      name: worker-ui
+  selector:
+    app: spark
+    role: worker

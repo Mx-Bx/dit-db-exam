@@ -1,0 +1,19 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: setup-cassandra-schema
+  namespace: data-pipeline
+spec:
+  template:
+    spec:
+      containers:
+      - name: cassandra-setup
+        image: bitnami/cassandra:latest
+        command: ["/bin/bash", "-c"]
+        args:
+          - |
+            sleep 15;  # Wait for Cassandra to be ready
+            cqlsh -u cassandra -p cassandra cassandra -e "CREATE KEYSPACE IF NOT EXISTS spark_streaming WITH replication = {'class':'SimpleStrategy','replication_factor':1};";
+            cqlsh -u cassandra -p cassandra cassandra -e "CREATE TABLE IF NOT EXISTS spark_streaming.fake_person_table(name text, company text, remote_ip text PRIMARY KEY, user_agent text, date text);";
+      restartPolicy: Never
+  backoffLimit: 2
