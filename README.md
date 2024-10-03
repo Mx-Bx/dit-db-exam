@@ -1,212 +1,119 @@
-# Real-Time Data Pipeline: Kafka to Cassandra using Spark and Airflow in Kubernetes
+# Projet : Examen de Base de Données (dit-db-exam)
 
-## Introduction
+## 1. Contexte et Objectif
+Ce projet est développé dans le cadre d'un examen de base de données. Il met en œuvre un pipeline de traitement de données sur Kubernetes, utilisant les technologies de pointe pour démontrer la gestion, l’ingestion, le traitement et le stockage de données en environnement distribué. 
 
-This project demonstrates a real-time data pipeline that generates fake person data using the `faker` Python package and sends it to Apache Kafka. We orchestrate this process with Apache Airflow. The data is consumed via Spark Structured Streaming and written to Cassandra. All services are deployed using Kubernetes.
+Les composants suivants sont utilisés :
 
-## Tech Stack
+- **Kafka** : Système de messagerie pour la collecte de données.
+- **Spark** : Framework de calcul distribué pour le traitement en temps réel.
+- **Cassandra** : Base de données NoSQL pour stocker les résultats des calculs.
+- **Airflow** : Orchestrateur de flux de travail pour automatiser et planifier les jobs.
 
-- **Python**
-- **Apache Airflow**
-- **Apache Kafka**
-- **Apache Spark**
-- **Apache Cassandra**
-- **Kubernetes**
+## 2. Structure du Projet
+Le projet est organisé en plusieurs répertoires distincts pour assurer la modularité et la clarté :
 
-## Project Structure
+- **`deployment/`** : Contient les manifests Kubernetes pour déployer les composants nécessaires :
+  - `airflow.yaml` : Déploiement de l’orchestrateur Apache Airflow.
+  - `cassandra.yaml` : Déploiement de la base de données Cassandra.
+  - `kafka-zookeeper.yaml` : Déploiement du cluster Kafka et de Zookeeper.
+  - `postgres.yaml` : Base de données pour stocker les métadonnées d’Airflow.
+  - `redis.yaml` : Déploiement de Redis pour la file d’attente de tâches Airflow.
+  - `spark.yaml` : Déploiement du cluster Apache Spark.
 
-1. **Data Generation**: Uses `faker` to generate synthetic data and sends it to a Kafka topic.
-2. **Data Orchestration**: Airflow DAGs manage the data generation schedule.
-3. **Data Streaming**: Spark Structured Streaming consumes data from Kafka.
-4. **Data Storage**: Processed data is stored in Cassandra.
+- **`src/`** : Scripts et jobs utilisés dans le pipeline de traitement :
+  - `airflow-scripts-copy-job.yaml` : Job Kubernetes pour copier les scripts d’Airflow.
+  - `cassandra-schema-setup-job.yaml` : Job de création du schéma initial dans Cassandra.
+  - `spark-script-copy-job.yaml` : Job pour copier les scripts Spark dans le cluster.
+  - `spark-submit-job.yaml` : Job pour soumettre les tâches Spark.
+  
+  - **`airflow/`** : Scripts DAG pour l’orchestration et Dockerfile d’Airflow.
+    - `scripts/` : Contient les scripts Python pour générer et traiter les flux de données.
+    - `airflow.Dockerfile` : Dockerfile pour créer l'image d'Airflow.
+    - `requirements.txt` : Liste des dépendances nécessaires pour Airflow.
+  
+  - **`spark/`** : Contient les scripts Spark pour le traitement des données.
+    - `spark.Dockerfile` : Dockerfile pour Spark.
+    - `spark_streaming.py` : Script principal pour le traitement de flux Kafka.
+    - `test_job.py` : Script de test pour vérifier l’intégration de Spark.
 
-## Kubernetes Setup Instructions
+- **`README.md`** : Documentation principale pour comprendre et configurer le projet.
+- **Fichiers YAML supplémentaires** : Définissent des rôles, des permissions et des configurations Kubernetes (ex : `pod-exec-role.yaml`, `namespace.yaml`, `rwo-pvc.yaml`).
 
-### 1. Prerequisites
+## 3. Prérequis
+- **Kubernetes** (v1.21+)
+- **Docker** (v20.10+)
+- **Helm** (v3.5+)
+- **kubectl** pour interagir avec le cluster Kubernetes
+- **Accès à un cluster Kubernetes** pour le déploiement
 
-- A Kubernetes cluster (local or cloud-based).
-- `kubectl` installed and configured to interact with your cluster.
-- Helm (optional) for managing applications in Kubernetes.
+## 4. Instructions de Déploiement sur Kubernetes
 
-### 2. Create a Namespace
-
-First, create a dedicated namespace for this project:
-
+### Étape 1 : Cloner le projet
 ```bash
-kubectl apply -f namespace.yaml
-
-kubectl apply -f local-path-storageclass.yaml
-
-kubectl apply -f pod-access-role.yaml
-
-kubectl apply -f pod-exec-role.yaml
-
-kubectl apply -f pod-exec-rolebinding.yaml
-
-kubectl apply -f spark-role.yaml
-
-kubectl apply -f spark-rolebinding.yaml
-
-kubectl apply -f rwo-pvc.yaml
-
-kubectl apply -f test-pvc-pod.yaml
-
-mkdir -p /opt/spark/check_point  && chmod 777 /opt/spark/check_point
-
-kubectl get pods -n kube-system
-kubectl rollout restart deployment coredns -n kube-system
-
+git clone https://github.com/Mx-Bx/dit-db-exam.git
+cd dit-db-exam/examen-db
 ```
 
-This will create a `data-pipeline` namespace where all services will run.
-
-### 3. Deploy PostgreSQL and Redis
-
-Deploy the PostgreSQL and Redis services, which are required for Airflow:
-
+### Étape 2 : Créer le namespace dédié
+Avant de déployer les services, créez un namespace isolé :
 ```bash
-kubectl apply -f deployment/postgres.yaml
-kubectl apply -f deployment/redis.yaml
+kubectl create namespace dit-db-exam
 ```
 
-### 4. Deploy Airflow
+### Étape 3 : Déployer les Services Composants
+- **Kafka et Zookeeper** :
+  ```bash
+  kubectl apply -f deployment/kafka-zookeeper.yaml -n dit-db-exam
+  ```
 
-Build the custom airflow image:
+- **Cassandra** :
+  ```bash
+  kubectl apply -f deployment/cassandra.yaml -n dit-db-exam
+  ```
 
+- **Spark** :
+  ```bash
+  kubectl apply -f deployment/spark.yaml -n dit-db-exam
+  ```
+
+- **Airflow** :
+  ```bash
+  kubectl apply -f deployment/airflow.yaml -n dit-db-exam
+  ```
+
+### Étape 4 : Configurer les Permissions et Volumes
+Assurez-vous que les permissions et volumes requis sont bien configurés :
 ```bash
-docker build -t barryma22/airflow:2.4.2-python3.10 -f src/airflow/airflow.Dockerfile src/airflow
+kubectl apply -f pod-access-role.yaml -n dit-db-exam
+kubectl apply -f rwo-pvc.yaml -n dit-db-exam
 ```
 
-Apply the manifests for Airflow (Webserver, Scheduler, Worker, etc.):
+## 5. Exécution des Tâches et Workflow
 
+### 5.1. Configuration du Schéma dans Cassandra
+Lancer le job de création de schéma :
 ```bash
-kubectl apply -f deployment/airflow.yaml
-
-kubectl create configmap airflow-scripts --from-file=/home/barryma/Workspace/tasks/kubernetes/examen-db/src/airflow/scripts/ --namespace data-pipeline
-
-kubectl apply -f src/airflow-scripts-copy-job.yaml
-
-kubectl exec -n data-pipeline airflow-webserver-78f56f7f4-2jdnn -- ls /opt/airflow/dags/
+kubectl apply -f src/cassandra-schema-setup-job.yaml -n dit-db-exam
 ```
 
-Ensure all pods are running:
-
+### 5.2. Lancer un Job Spark
+Soumettre un job Spark pour analyser les flux de données en temps réel :
 ```bash
-kubectl get pods -n data-pipeline
+kubectl apply -f src/spark-submit-job.yaml -n dit-db-exam
 ```
 
-Once Airflow is running, you can access the webserver at:
+### 5.3. Orchestration avec Airflow
+Configurer les DAGs et vérifier que les tâches s’exécutent correctement.
 
-```bash
-kubectl port-forward svc/airflow-webserver 8080:8080 -n data-pipeline
-```
+## 6. Schéma et Flux de Données
+- **Kafka** collecte les messages depuis les sources de données.
+- **Spark** analyse et transforme les flux de données en temps réel.
+- **Cassandra** stocke les résultats traités.
+- **Airflow** orchestre les différentes étapes du pipeline.
 
-Access it via your browser at `http://localhost:8080`.
+## 7. Contribution
+Les contributions sont les bienvenues ! Ouvrez une issue ou une pull request pour proposer des améliorations.
 
-### 5. Deploy Zookeeper and Kafka
-
-Deploy Zookeeper and Kafka using:
-
-```bash
-kubectl apply -f deployment/kafka-zookeeper.yaml
-```
-
-### 6. Deploy Spark Master and Workers
-
-Deploy the Spark Master and Workers:
-
-```bash
-kubectl apply -f deployment/spark.yaml
-```
-
-Verify the Spark UI is accessible:
-
-```bash
-kubectl port-forward svc/spark-master 8080:8080 -n data-pipeline
-```
-
-### 7. Deploy Cassandra
-
-Deploy the Cassandra database:
-
-```bash
-kubectl apply -f deployment/cassandra.yaml
-```
-
-### 8. Verifying the Setup
-
-1. **Airflow DAGs**: Check that DAGs are running successfully in Airflow.
-2. **Kafka**: Produce and consume messages using Kafka.
-3. **Spark**: Ensure Spark can process Kafka data and write to Cassandra.
-4. **Cassandra**: Verify data is written correctly to Cassandra.
-
-### 9. Demo
-
-1. **Copying the Spark script to the master pod.**
-2. **Creating the Cassandra keyspace and table.**
-3. **Running the `spark-submit` command to start the streaming job.**
-
-## Step 1: Create a Kubernetes Job to Copy the Spark Script
-
-This job will use a temporary busybox container to copy the `spark_streaming.py` script into the Spark master pod using a Kubernetes command.
-
-```bash
-kubectl create configmap spark-script-config --from-file=src/scripts/spark_streaming.py --namespace data-pipeline
-
-kubectl apply -f src/spark-script-copy-job.yaml
-```
-
----
-
-## Step 2: Create a Kubernetes Job to Set Up the Cassandra Schema
-
-This job will connect to the Cassandra pod, run `cqlsh`, and create the keyspace and table.
-
-```bash
-kubectl apply -f src/cassandra-schema-setup-job.yaml
-```
-
-> This job uses `kubectl exec` to execute the Cassandra commands inside the pod. Adjust the schema setup as needed.
-
----
-
-## Step 3: Create a Kubernetes Job for `spark-submit`
-
-The job will run the `spark-submit` command in the Spark master pod to start the streaming application.
-
-```bash
-docker build -t barryma22/spark-k8s -f src/spark/spark.Dockerfile src/spark
-
-docker push barryma22/spark-k8s
-
-kubectl apply -f src/spark-submit-job.yaml
-```
-
-> The `spark-submit` job runs the script on the Spark master. Ensure the master service is configured properly (`spark://spark-master:7077`).
-
----
-
-## Step 4: Automating Dependencies Using a Kubernetes CronJob
-
-```bash
-./launch-spark-job.sh
-
-chmod +x run-all-jobs.sh
-./run-all-jobs.sh
-```
-
----
-
-## Final Considerations
-
-1. **Check Kubernetes Job Status**: Use `kubectl get jobs -n data-pipeline` to see the status of each job.
-2. **Debugging Logs**: Use `kubectl logs job/<job-name> -n data-pipeline` to view the logs of each job.
-3. **Adjust Timings**: You might need to adjust sleep durations (`sleep 10` etc.) depending on the readiness of each service.
-
-### 10. Cleanup
-
-To clean up the entire project, you can delete the namespace:
-
-```bash
-kubectl delete namespace data-pipeline
-```
+## 8. Auteurs
+Ce projet a été développé dans le cadre d'un **examen de base de données** par **Mx-Bx**.
