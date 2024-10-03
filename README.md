@@ -3,6 +3,9 @@
 ## 1. Contexte et Objectif
 Ce projet est développé dans le cadre d'un examen de base de données. Il met en œuvre un pipeline de traitement de données sur Kubernetes, utilisant les technologies de pointe pour démontrer la gestion, l’ingestion, le traitement et le stockage de données en environnement distribué. 
 
+![Diagramme d'architecture](docs/arch-org-exam.png)
+
+
 Les composants suivants sont utilisés :
 
 - **Kafka** : Système de messagerie pour la collecte de données.
