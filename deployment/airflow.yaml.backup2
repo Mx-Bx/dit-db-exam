@@ -16,8 +16,6 @@ data:
   AIRFLOW__CELERY__BROKER_URL: "redis://:@redis:6379/0"
   AIRFLOW__CELERY__RESULT_BACKEND: "db+postgresql://airflow:airflow@postgres/airflow"
   AIRFLOW__CORE__ALLOWED_DESERIALIZATION_CLASSES: "airflow.*,astro.*"
-
-# 2. PersistentVolumes for DAGS and Logs
 ---
 apiVersion: v1
 kind: PersistentVolume
@@ -31,7 +29,7 @@ spec:
   persistentVolumeReclaimPolicy: Retain
   storageClassName: local-path
   local:
-    path: /mnt/data/airflow-dags
+    path: /mnt/data/airflow-dags  # Ensure this path exists on the worker nodes
   nodeAffinity:
     required:
       nodeSelectorTerms:
@@ -39,7 +37,7 @@ spec:
             - key: kubernetes.io/hostname
               operator: In
               values:
-                - master  # DAGS PV is restricted to master node
+                - worker1
 ---
 apiVersion: v1
 kind: PersistentVolume
@@ -47,13 +45,13 @@ metadata:
   name: airflow-logs-pv
 spec:
   capacity:
-    storage: 1Gi
+    storage: 1Gi  # Adjust the size if necessary
   accessModes:
     - ReadWriteOnce
   persistentVolumeReclaimPolicy: Retain
-  storageClassName: local-path
+  storageClassName: local-path  # This should match the PVC's storage class name
   local:
-    path: /mnt/data/airflow-logs
+    path: /mnt/data/airflow-logs  # Ensure this path exists on the worker nodes
   nodeAffinity:
     required:
       nodeSelectorTerms:
@@ -61,9 +59,9 @@ spec:
             - key: kubernetes.io/hostname
               operator: In
               values:
-                - worker1  # Logs PV is restricted to worker1 node
+                - worker1
 
-# 3. PersistentVolumeClaim for Logs and DAGs
+# 2. PersistentVolumeClaim for Logs and DAGs
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -91,7 +89,7 @@ spec:
     requests:
       storage: 1Gi
 
-# 4. Init Job for Airflow Database Initialization
+# 3. Init Job for Airflow Database Initialization
 ---
 apiVersion: batch/v1
 kind: Job
@@ -117,7 +115,7 @@ spec:
       restartPolicy: Never
   backoffLimit: 4
 
-# 5. Deployment for Airflow Webserver (on master)
+# 4. Deployment for Airflow Webserver with Admin User Creation
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -139,9 +137,34 @@ spec:
         app: airflow
         component: webserver
     spec:
-      nodeSelector:
-        kubernetes.io/hostname: master
       serviceAccountName: airflow-admin
+      initContainers:
+        - name: check-db-init
+          image: bitnami/kubectl:latest
+          command:
+            - /bin/sh
+            - -c
+            - |
+              while [[ $(kubectl get job airflow-init -n data-pipeline -o jsonpath='{.status.succeeded}') != "1" ]]; do
+                echo "Waiting for airflow-init job to complete..."
+                sleep 2
+              done
+        - name: create-admin-user
+          image: barryma22/airflow:2.4.2-python3.10
+          command:
+            - /bin/bash
+            - -c
+            - |
+              airflow users create \
+              --username admin \
+              --firstname Admin \
+              --lastname User \
+              --role Admin \
+              --email admin@example.com \
+              --password admin
+          envFrom:
+            - configMapRef:
+                name: airflow-config
       containers:
         - name: airflow-webserver
           image: barryma22/airflow:2.4.2-python3.10
@@ -164,7 +187,7 @@ spec:
           persistentVolumeClaim:
             claimName: airflow-dags-pvc
 
-# 6. Service for Airflow Webserver
+# 5. Service for Airflow Webserver
 ---
 apiVersion: v1
 kind: Service
@@ -180,7 +203,7 @@ spec:
       targetPort: 8080
       protocol: TCP
 
-# 7. Deployment for Airflow Scheduler (on master)
+# 6. Deployment for Airflow Scheduler
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -202,9 +225,18 @@ spec:
         app: airflow
         component: scheduler
     spec:
-      nodeSelector:
-        kubernetes.io/hostname: master
       serviceAccountName: airflow-admin
+      initContainers:
+        - name: check-db-init
+          image: bitnami/kubectl:latest
+          command:
+            - /bin/sh
+            - -c
+            - |
+              while [[ $(kubectl get job airflow-init -n data-pipeline -o jsonpath='{.status.succeeded}') != "1" ]]; do
+                echo "Waiting for airflow-init job to complete..."
+                sleep 2
+              done
       containers:
         - name: airflow-scheduler
           image: barryma22/airflow:2.4.2-python3.10
@@ -225,7 +257,7 @@ spec:
           persistentVolumeClaim:
             claimName: airflow-dags-pvc
 
-# 8. Deployment for Airflow Worker (Distributed on workers)
+# 7. Deployment for Airflow Worker
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -236,7 +268,7 @@ metadata:
     app: airflow
     component: worker
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: airflow
@@ -247,17 +279,18 @@ spec:
         app: airflow
         component: worker
     spec:
-      affinity:
-        podAntiAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-          - weight: 1
-            podAffinityTerm:
-              labelSelector:
-                matchLabels:
-                  app: airflow
-                  component: worker
-              topologyKey: "kubernetes.io/hostname"
       serviceAccountName: airflow-admin
+      initContainers:
+        - name: check-db-init
+          image: bitnami/kubectl:latest
+          command:
+            - /bin/sh
+            - -c
+            - |
+              while [[ $(kubectl get job airflow-init -n data-pipeline -o jsonpath='{.status.succeeded}') != "1" ]]; do
+                echo "Waiting for airflow-init job to complete..."
+                sleep 2
+              done
       containers:
         - name: airflow-worker
           image: barryma22/airflow:2.4.2-python3.10
@@ -278,7 +311,7 @@ spec:
           persistentVolumeClaim:
             claimName: airflow-dags-pvc
 
-# 9. Flower UI Deployment and Service (on worker1)
+# 8. Flower UI Deployment and Service
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -300,9 +333,18 @@ spec:
         app: airflow
         component: flower
     spec:
-      nodeSelector:
-        kubernetes.io/hostname: worker1
       serviceAccountName: airflow-admin
+      initContainers:
+        - name: check-db-init
+          image: bitnami/kubectl:latest
+          command:
+            - /bin/sh
+            - -c
+            - |
+              while [[ $(kubectl get job airflow-init -n data-pipeline -o jsonpath='{.status.succeeded}') != "1" ]]; do
+                echo "Waiting for airflow-init job to complete..."
+                sleep 2
+              done
       containers:
         - name: airflow-flower
           image: barryma22/airflow:2.4.2-python3.10
@@ -326,4 +368,3 @@ spec:
     - port: 5555
       targetPort: 5555
       protocol: TCP
-

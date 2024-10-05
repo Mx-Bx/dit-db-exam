@@ -77,6 +77,8 @@ docker build -t barryma22/airflow:2.4.2-python3.10 -f src/airflow/airflow.Docker
 Déployez ensuite les composants d'Airflow (Webserver, Scheduler, Worker) :
 
 ```bash
+kubectl apply -f config/airflow-admin-serviceaccount.yaml
+
 ## On the workers :
 sudo mkdir -p /mnt/data/airflow-dags
 sudo mkdir -p /mnt/data/airflow-logs

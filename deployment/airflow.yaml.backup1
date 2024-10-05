@@ -16,9 +16,8 @@ data:
   AIRFLOW__CELERY__BROKER_URL: "redis://:@redis:6379/0"
   AIRFLOW__CELERY__RESULT_BACKEND: "db+postgresql://airflow:airflow@postgres/airflow"
   AIRFLOW__CORE__ALLOWED_DESERIALIZATION_CLASSES: "airflow.*,astro.*"
-
-# 2. PersistentVolumes for DAGS and Logs
 ---
+# 2. PersistentVolume for DAGs and Logs
 apiVersion: v1
 kind: PersistentVolume
 metadata:
@@ -39,7 +38,9 @@ spec:
             - key: kubernetes.io/hostname
               operator: In
               values:
-                - master  # DAGS PV is restricted to master node
+                - master
+                - worker1
+                - worker2
 ---
 apiVersion: v1
 kind: PersistentVolume
@@ -61,7 +62,9 @@ spec:
             - key: kubernetes.io/hostname
               operator: In
               values:
-                - worker1  # Logs PV is restricted to worker1 node
+                - master
+                - worker1
+                - worker2
 
 # 3. PersistentVolumeClaim for Logs and DAGs
 ---
@@ -86,12 +89,12 @@ metadata:
 spec:
   accessModes:
     - ReadWriteOnce
-  storageClassName: local-path
   resources:
     requests:
       storage: 1Gi
+  storageClassName: local-path
 
-# 4. Init Job for Airflow Database Initialization
+# 4. Init Job for Airflow Database Initialization on the Master Node
 ---
 apiVersion: batch/v1
 kind: Job
@@ -107,6 +110,12 @@ spec:
         app: airflow
     spec:
       serviceAccountName: airflow-admin
+      securityContext:  # Add this section
+        runAsUser: 0
+        runAsGroup: 0
+        fsGroup: 0
+      nodeSelector:
+        kubernetes.io/hostname: master
       containers:
         - name: airflow-init
           image: barryma22/airflow:2.4.2-python3.10
@@ -117,7 +126,7 @@ spec:
       restartPolicy: Never
   backoffLimit: 4
 
-# 5. Deployment for Airflow Webserver (on master)
+# 5. Deployment for Airflow Webserver on the Master Node
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -139,9 +148,24 @@ spec:
         app: airflow
         component: webserver
     spec:
+      serviceAccountName: airflow-admin
+      securityContext:  # Add this section
+        runAsUser: 0
+        runAsGroup: 0
+        fsGroup: 0
       nodeSelector:
         kubernetes.io/hostname: master
-      serviceAccountName: airflow-admin
+      initContainers:
+        - name: check-db-init
+          image: bitnami/kubectl:latest
+          command:
+            - /bin/sh
+            - -c
+            - |
+              while [[ $(kubectl get job airflow-init -n data-pipeline -o jsonpath='{.status.succeeded}') != "1" ]]; do
+                echo "Waiting for airflow-init job to complete..."
+                sleep 2
+              done
       containers:
         - name: airflow-webserver
           image: barryma22/airflow:2.4.2-python3.10
@@ -164,23 +188,7 @@ spec:
           persistentVolumeClaim:
             claimName: airflow-dags-pvc
 
-# 6. Service for Airflow Webserver
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: airflow-webserver
-  namespace: data-pipeline
-spec:
-  selector:
-    app: airflow
-    component: webserver
-  ports:
-    - port: 8080
-      targetPort: 8080
-      protocol: TCP
-
-# 7. Deployment for Airflow Scheduler (on master)
+# 6. Scheduler on the Master Node
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -202,9 +210,13 @@ spec:
         app: airflow
         component: scheduler
     spec:
+      serviceAccountName: airflow-admin
+      securityContext:  # Add this section
+        runAsUser: 0
+        runAsGroup: 0
+        fsGroup: 0
       nodeSelector:
         kubernetes.io/hostname: master
-      serviceAccountName: airflow-admin
       containers:
         - name: airflow-scheduler
           image: barryma22/airflow:2.4.2-python3.10
@@ -225,7 +237,7 @@ spec:
           persistentVolumeClaim:
             claimName: airflow-dags-pvc
 
-# 8. Deployment for Airflow Worker (Distributed on workers)
+# 7. Airflow Worker on Worker2
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -236,7 +248,7 @@ metadata:
     app: airflow
     component: worker
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: airflow
@@ -247,17 +259,13 @@ spec:
         app: airflow
         component: worker
     spec:
-      affinity:
-        podAntiAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-          - weight: 1
-            podAffinityTerm:
-              labelSelector:
-                matchLabels:
-                  app: airflow
-                  component: worker
-              topologyKey: "kubernetes.io/hostname"
       serviceAccountName: airflow-admin
+      securityContext:  # Add this section
+        runAsUser: 0
+        runAsGroup: 0
+        fsGroup: 0
+      nodeSelector:
+        kubernetes.io/hostname: worker2
       containers:
         - name: airflow-worker
           image: barryma22/airflow:2.4.2-python3.10
@@ -278,7 +286,7 @@ spec:
           persistentVolumeClaim:
             claimName: airflow-dags-pvc
 
-# 9. Flower UI Deployment and Service (on worker1)
+# 8. Flower UI Deployment on Worker1
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -300,9 +308,13 @@ spec:
         app: airflow
         component: flower
     spec:
+      serviceAccountName: airflow-admin
+      securityContext:  # Add this section
+        runAsUser: 0
+        runAsGroup: 0
+        fsGroup: 0
       nodeSelector:
         kubernetes.io/hostname: worker1
-      serviceAccountName: airflow-admin
       containers:
         - name: airflow-flower
           image: barryma22/airflow:2.4.2-python3.10
@@ -313,6 +325,7 @@ spec:
             - configMapRef:
                 name: airflow-config
 ---
+# Flower UI Service
 apiVersion: v1
 kind: Service
 metadata:
