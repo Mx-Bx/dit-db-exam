@@ -1,0 +1,71 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cassandra-ecommerce-schema-setup-job
+  namespace: data-pipeline
+spec:
+  template:
+    spec:
+      containers:
+      - name: cassandra-ecommerce-setup
+        image: bitnami/cassandra:latest
+        command: ["/bin/bash", "-c"]
+        args:
+          - |
+            # Attendre que Cassandra soit prêt
+            sleep 15;
+
+            # Créer un fichier temporaire avec le script CQL
+            echo '
+            CREATE KEYSPACE IF NOT EXISTS ecommerce WITH replication = {'\''class'\'':'\''SimpleStrategy'\'', '\''replication_factor'\'': 1};
+
+            USE ecommerce;
+
+            CREATE TABLE IF NOT EXISTS products (
+              product_id UUID PRIMARY KEY,
+              name TEXT,
+              category TEXT,
+              price DECIMAL,
+              availability BOOLEAN,
+              supplier TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS customers (
+              customer_id UUID PRIMARY KEY,
+              first_name TEXT,
+              last_name TEXT,
+              email TEXT,
+              address TEXT,
+              phone TEXT,
+              created_at TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS order_history (
+              order_id UUID,
+              customer_id UUID,
+              order_date TIMESTAMP,
+              status TEXT,
+              items MAP<UUID, INT>,
+              total_amount DECIMAL,
+              bucket_month TEXT,
+              PRIMARY KEY ((customer_id, bucket_month), order_date, order_id)
+            ) WITH CLUSTERING ORDER BY (order_date DESC);
+
+            CREATE TABLE IF NOT EXISTS customer_behavior (
+              customer_id UUID,
+              bucket_day DATE,
+              interaction_time TIMESTAMP,
+              session_id UUID,
+              event_type TEXT,
+              product_id UUID,
+              PRIMARY KEY ((customer_id, bucket_day), interaction_time, session_id, event_type)
+            ) WITH CLUSTERING ORDER BY (interaction_time DESC);
+            ' > /tmp/ecommerce_schema.cql
+
+            # Exécuter le script CQL
+            cqlsh -u cassandra -p cassandra $CASSANDRA_HOST -f /tmp/ecommerce_schema.cql;
+        env:
+        - name: CASSANDRA_HOST
+          value: "cassandra.data-pipeline.svc.cluster.local"
+      restartPolicy: Never
+  backoffLimit: 2
