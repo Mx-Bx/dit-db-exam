@@ -1,104 +1,118 @@
 import logging
 import os
 from pyspark.sql import SparkSession
-from pyspark.sql.types import StructType, StructField, StringType, MapType, DecimalType, TimestampType
+from pyspark.sql.types import StructType, StructField, StringType, FloatType, MapType, BooleanType
 from pyspark.sql.functions import from_json, col
 
-# Configuration du logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s:%(funcName)s:%(levelname)s:%(message)s')
+# Logging Configuration
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s:%(funcName)s:%(levelname)s:%(message)s')
 logger = logging.getLogger("spark_structured_streaming")
 
-# Variables d'environnement pour Kafka et Cassandra
+# Environment Variables for Configuration
 KAFKA_SERVER = os.getenv("KAFKA_SERVER", "kafka.data-pipeline.svc.cluster.local:9092")
-KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "ecommerce_data")
+PRODUCT_TOPIC = os.getenv("PRODUCT_TOPIC", "products")
+CUSTOMER_TOPIC = os.getenv("CUSTOMER_TOPIC", "customers")
+ORDER_TOPIC = os.getenv("ORDER_TOPIC", "orders")
+USER_ACTIVITY_TOPIC = os.getenv("USER_ACTIVITY_TOPIC", "user_activity")
+
 CASSANDRA_KEYSPACE = os.getenv("CASSANDRA_KEYSPACE", "ecommerce")
-CASSANDRA_ORDER_TABLE = os.getenv("CASSANDRA_ORDER_TABLE", "order_history")
-CASSANDRA_BEHAVIOR_TABLE = os.getenv("CASSANDRA_BEHAVIOR_TABLE", "customer_behavior")
-CASSANDRA_HOST = os.getenv("CASSANDRA_HOST", "cassandra.data-pipeline.svc.cluster.local")
 CHECKPOINT_LOCATION = os.getenv("CHECKPOINT_LOCATION", "/opt/spark/check_point")
+CASSANDRA_HOST = os.getenv("CASSANDRA_HOST", "cassandra.data-pipeline.svc.cluster.local")
 
 logger.info(f"Kafka Server: {KAFKA_SERVER}")
-logger.info(f"Kafka Topic: {KAFKA_TOPIC}")
 logger.info(f"Cassandra Host: {CASSANDRA_HOST}")
 logger.info(f"Cassandra Keyspace: {CASSANDRA_KEYSPACE}")
-logger.info(f"Cassandra Order Table: {CASSANDRA_ORDER_TABLE}")
-logger.info(f"Cassandra Behavior Table: {CASSANDRA_BEHAVIOR_TABLE}")
 
 def spark_process():
-    # Initialiser la session Spark avec les configurations Cassandra
+    # Initialize Spark Session with Cassandra Configuration
     spark = SparkSession \
         .builder \
-        .appName("ECommerceSparkStreaming") \
+        .appName("EcommerceSparkStreaming") \
         .config("spark.cassandra.connection.host", CASSANDRA_HOST) \
         .config("spark.cassandra.connection.port", "9042") \
         .config("spark.cassandra.auth.username", "cassandra") \
         .config("spark.cassandra.auth.password", "cassandra") \
         .getOrCreate()
 
-    # Schéma pour les événements de commande (order_history)
+    # Define Schemas for Each Kafka Topic
+    product_schema = StructType([
+        StructField("product_id", StringType(), False),
+        StructField("name", StringType(), False),
+        StructField("category", StringType(), False),
+        StructField("price", FloatType(), False),
+        StructField("availability", BooleanType(), False),
+        StructField("supplier", StringType(), False)
+    ])
+
+    customer_schema = StructType([
+        StructField("customer_id", StringType(), False),
+        StructField("first_name", StringType(), False),
+        StructField("last_name", StringType(), False),
+        StructField("email", StringType(), False),
+        StructField("address", StringType(), False),
+        StructField("phone", StringType(), False),
+        StructField("created_at", StringType(), False)
+    ])
+
     order_schema = StructType([
         StructField("order_id", StringType(), False),
         StructField("customer_id", StringType(), False),
-        StructField("order_date", TimestampType(), False),
+        StructField("order_date", StringType(), False),
         StructField("status", StringType(), False),
         StructField("items", MapType(StringType(), StringType()), False),
-        StructField("total_amount", DecimalType(), False)
+        StructField("total_amount", FloatType(), False),
+        StructField("bucket_month", StringType(), False)
     ])
 
-    # Schéma pour les événements comportementaux des utilisateurs (customer_behavior)
-    behavior_schema = StructType([
+    user_activity_schema = StructType([
         StructField("customer_id", StringType(), False),
         StructField("bucket_day", StringType(), False),
-        StructField("interaction_time", TimestampType(), False),
+        StructField("interaction_time", StringType(), False),
         StructField("session_id", StringType(), False),
         StructField("event_type", StringType(), False),
-        StructField("product_id", StringType(), True)
+        StructField("product_id", StringType(), False)
     ])
 
-    # Lire les flux de Kafka
-    raw_df = spark \
-        .readStream \
-        .format("kafka") \
-        .option("kafka.bootstrap.servers", KAFKA_SERVER) \
-        .option("subscribe", KAFKA_TOPIC) \
-        .option("startingOffsets", "earliest") \
-        .load()
+    # Create Streaming DataFrames for Each Kafka Topic
+    def kafka_stream(topic, schema):
+        return spark \
+            .readStream \
+            .format("kafka") \
+            .option("kafka.bootstrap.servers", KAFKA_SERVER) \
+            .option("subscribe", topic) \
+            .option("startingOffsets", "earliest") \
+            .load() \
+            .select(from_json(col("value").cast("string"), schema).alias("data")) \
+            .select("data.*")
 
-    logger.info("Connexion à Kafka réussie et début de lecture du flux.")
+    product_df = kafka_stream(PRODUCT_TOPIC, product_schema)
+    customer_df = kafka_stream(CUSTOMER_TOPIC, customer_schema)
+    order_df = kafka_stream(ORDER_TOPIC, order_schema)
+    user_activity_df = kafka_stream(USER_ACTIVITY_TOPIC, user_activity_schema)
 
-    # Transformer les données de commande pour correspondre au schéma `order_history`
-    orders_df = raw_df.select(from_json(col("value").cast("string"), order_schema).alias("data")) \
-                      .select("data.order_id", "data.customer_id", "data.order_date", "data.status", "data.items", "data.total_amount")
+    # Write Each DataFrame to Corresponding Cassandra Table
+    def write_to_cassandra(df, table_name):
+        return df.writeStream \
+            .format("org.apache.spark.sql.cassandra") \
+            .outputMode("append") \
+            .option("checkpointLocation", f"{CHECKPOINT_LOCATION}/{table_name}") \
+            .option("keyspace", CASSANDRA_KEYSPACE) \
+            .option("table", table_name) \
+            .start()
 
-    # Écrire les commandes dans Cassandra
-    order_query = orders_df.writeStream \
-        .format("org.apache.spark.sql.cassandra") \
-        .outputMode("append") \
-        .option("table", CASSANDRA_ORDER_TABLE) \
-        .option("keyspace", CASSANDRA_KEYSPACE) \
-        .option("checkpointLocation", CHECKPOINT_LOCATION) \
-        .start()
+    # Write Each DataFrame to Its Corresponding Cassandra Table
+    product_query = write_to_cassandra(product_df, "products")
+    customer_query = write_to_cassandra(customer_df, "customers")
+    order_query = write_to_cassandra(order_df, "order_history")
+    user_activity_query = write_to_cassandra(user_activity_df, "customer_behavior")
 
-    logger.info("Stream de données de commande vers Cassandra lancé.")
-
-    # Transformer les données de comportement utilisateur pour correspondre au schéma `customer_behavior`
-    behavior_df = raw_df.select(from_json(col("value").cast("string"), behavior_schema).alias("data")) \
-                        .select("data.customer_id", "data.bucket_day", "data.interaction_time", "data.session_id", "data.event_type", "data.product_id")
-
-    # Écrire les comportements des utilisateurs dans Cassandra
-    behavior_query = behavior_df.writeStream \
-        .format("org.apache.spark.sql.cassandra") \
-        .outputMode("append") \
-        .option("table", CASSANDRA_BEHAVIOR_TABLE) \
-        .option("keyspace", CASSANDRA_KEYSPACE) \
-        .option("checkpointLocation", CHECKPOINT_LOCATION) \
-        .start()
-
-    logger.info("Stream de données comportementales vers Cassandra lancé.")
-
-    # Attendre la terminaison des deux streams
+    # Wait for All Queries to Complete
+    product_query.awaitTermination()
+    customer_query.awaitTermination()
     order_query.awaitTermination()
-    behavior_query.awaitTermination()
+    user_activity_query.awaitTermination()
+
 
 if __name__ == '__main__':
     spark_process()
