@@ -2,7 +2,7 @@ import logging
 import os
 from pyspark.sql import SparkSession
 from pyspark.sql.types import StructType, StructField, StringType, FloatType, MapType, BooleanType
-from pyspark.sql.functions import from_json, col
+from pyspark.sql.functions import from_json, col, date_format
 
 # Logging Configuration
 logging.basicConfig(level=logging.INFO,
@@ -17,7 +17,7 @@ ORDER_TOPIC = os.getenv("ORDER_TOPIC", "orders")
 USER_ACTIVITY_TOPIC = os.getenv("USER_ACTIVITY_TOPIC", "user_activity")
 
 CASSANDRA_KEYSPACE = os.getenv("CASSANDRA_KEYSPACE", "ecommerce")
-CHECKPOINT_LOCATION = os.getenv("CHECKPOINT_LOCATION", "/opt/spark/check_point")
+CHECKPOINT_LOCATION = os.getenv("CHECKPOINT_LOCATION", "/mnt/data/check_point")
 CASSANDRA_HOST = os.getenv("CASSANDRA_HOST", "cassandra.data-pipeline.svc.cluster.local")
 
 logger.info(f"Kafka Server: {KAFKA_SERVER}")
@@ -90,6 +90,11 @@ def spark_process():
     customer_df = kafka_stream(CUSTOMER_TOPIC, customer_schema)
     order_df = kafka_stream(ORDER_TOPIC, order_schema)
     user_activity_df = kafka_stream(USER_ACTIVITY_TOPIC, user_activity_schema)
+
+    # Fix Timestamp Columns for Cassandra Compatibility
+    customer_df = customer_df.withColumn("created_at", date_format(col("created_at"), "yyyy-MM-dd HH:mm:ss.SSS"))
+    order_df = order_df.withColumn("order_date", date_format(col("order_date"), "yyyy-MM-dd HH:mm:ss.SSS"))
+    user_activity_df = user_activity_df.withColumn("interaction_time", date_format(col("interaction_time"), "yyyy-MM-dd HH:mm:ss.SSS"))
 
     # Write Each DataFrame to Corresponding Cassandra Table
     def write_to_cassandra(df, table_name):
