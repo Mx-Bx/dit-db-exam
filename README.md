@@ -34,27 +34,24 @@ Ce projet met en œuvre un pipeline de traitement de données en temps réel cap
 Créez d'abord un namespace dédié à ce projet :
 
 ```bash
-kubectl apply -f namespace.yaml
+kubectl apply -f config/namespace.yaml
 ```
 
 Puis, appliquez les ressources suivantes pour configurer les rôles et les droits d'accès nécessaires :
 
 ```bash
-kubectl apply -f local-path-storageclass.yaml
-kubectl apply -f pod-access-role.yaml
-kubectl apply -f pod-exec-role.yaml
-kubectl apply -f pod-exec-rolebinding.yaml
-kubectl apply -f spark-role.yaml
-kubectl apply -f spark-rolebinding.yaml
-kubectl apply -f rwo-pvc.yaml
-kubectl apply -f test-pvc-pod.yaml
+kubectl apply -f config/data-pipeline-role.yaml
+kubectl apply -f config/data-pipeline-rolebinding.yaml
+
+
+kubectl apply -f config/local-path-storage.yaml
+kubectl apply -f config/pvc.yaml
 ```
 
 Vérifiez l'état des pods système pour vous assurer que tous les composants sont en place :
 
 ```bash
 kubectl get pods -n kube-system
-kubectl rollout restart deployment coredns -n kube-system
 ```
 
 Cela créera un namespace `data-pipeline` où tous les services seront exécutés de manière isolée.
@@ -63,6 +60,9 @@ Cela créera un namespace `data-pipeline` où tous les services seront exécuté
 Déployez les services PostgreSQL et Redis requis pour stocker les métadonnées et la queue des tâches Airflow :
 
 ```bash
+## On the workers : sudo chown -R 999:999 /mnt/data/postgres && sudo chmod -R 700 /mnt/data/postgres
+
+
 kubectl apply -f deployment/postgres.yaml
 kubectl apply -f deployment/redis.yaml
 ```
@@ -77,6 +77,14 @@ docker build -t barryma22/airflow:2.4.2-python3.10 -f src/airflow/airflow.Docker
 Déployez ensuite les composants d'Airflow (Webserver, Scheduler, Worker) :
 
 ```bash
+## On the workers :
+sudo mkdir -p /mnt/data/airflow-dags
+sudo mkdir -p /mnt/data/airflow-logs
+sudo chown -R 50000:50000 /mnt/data/airflow-logs
+sudo chmod -R 775 /mnt/data/airflow-logs
+sudo chown -R 50000:50000 /mnt/data/airflow-dags
+sudo chmod -R 775 /mnt/data/airflow-dags
+
 kubectl apply -f deployment/airflow.yaml
 ```
 

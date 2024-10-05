@@ -1,5 +1,19 @@
 # k8s/postgres.yaml
-
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: postgres-pv
+spec:
+  capacity:
+    storage: 5Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-path
+  hostPath:
+    path: "/mnt/data/postgres"
+    type: DirectoryOrCreate
+---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -10,7 +24,8 @@ spec:
     - ReadWriteOnce
   resources:
     requests:
-      storage: 1Gi
+      storage: 5Gi
+  storageClassName: local-path
 ---
 apiVersion: apps/v1
 kind: Deployment
