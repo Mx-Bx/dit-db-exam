@@ -34,27 +34,27 @@ Ce projet met en œuvre un pipeline de traitement de données en temps réel cap
 Créez d'abord un namespace dédié à ce projet :
 
 ```bash
-kubectl apply -f namespace.yaml
+kubectl apply -f config/namespace.yaml
 ```
 
 Puis, appliquez les ressources suivantes pour configurer les rôles et les droits d'accès nécessaires :
 
 ```bash
-kubectl apply -f local-path-storageclass.yaml
-kubectl apply -f pod-access-role.yaml
-kubectl apply -f pod-exec-role.yaml
-kubectl apply -f pod-exec-rolebinding.yaml
-kubectl apply -f spark-role.yaml
-kubectl apply -f spark-rolebinding.yaml
-kubectl apply -f rwo-pvc.yaml
-kubectl apply -f test-pvc-pod.yaml
+kubectl apply -f config/local-path-storageclass.yaml
+kubectl apply -f config/pod-access-role.yaml
+kubectl apply -f config/pod-exec-role.yaml
+kubectl apply -f config/pod-exec-rolebinding.yaml
+kubectl apply -f config/spark-role.yaml
+kubectl apply -f config/spark-rolebinding.yaml
+kubectl apply -f config/rwo-pvc.yaml
+kubectl apply -f config/test-pvc-pod.yaml
 ```
 
 Vérifiez l'état des pods système pour vous assurer que tous les composants sont en place :
 
 ```bash
 kubectl get pods -n kube-system
-kubectl rollout restart deployment coredns -n kube-system
+kubectl rollout restart deployment coredns -n kube-system # En cas de problème de résolution DNS
 ```
 
 Cela créera un namespace `data-pipeline` où tous les services seront exécutés de manière isolée.
@@ -71,12 +71,16 @@ kubectl apply -f deployment/redis.yaml
 Créez et déployez l'image Docker personnalisée d'Airflow :
 
 ```bash
-docker build -t barryma22/airflow:2.4.2-python3.10 -f src/airflow/airflow.Dockerfile src/airflow
+# <NomRegistreDockerHub> : Nom de votre régistre sur Docker Hub
+docker build -t <NomRegistreDockerHub>/airflow:2.4.2-python3.10 -f src/airflow/airflow.Dockerfile src/airflow
+
+docker push <NomRegistreDockerHub>/airflow:2.4.2-python3.10
 ```
 
 Déployez ensuite les composants d'Airflow (Webserver, Scheduler, Worker) :
 
 ```bash
+# N'oubliez pas de changer le nom de l'image dans le manifest airflow.yaml
 kubectl apply -f deployment/airflow.yaml
 ```
 
@@ -85,6 +89,9 @@ Créez une **ConfigMap** pour injecter les scripts nécessaires dans le conteneu
 ```bash
 kubectl create configmap airflow-scripts --from-file=/home/barryma/Workspace/tasks/kubernetes/examen-db/src/airflow/scripts/ --namespace data-pipeline
 kubectl apply -f src/airflow-scripts-copy-job.yaml
+
+#### Ou bien lancer le script shell upload_airflow_scripts.sh
+./upload_airflow_scripts.sh
 ```
 
 Assurez-vous que tous les pods sont en cours d'exécution :
@@ -143,6 +150,9 @@ kubectl apply -f deployment/cassandra.yaml
 ```bash
 kubectl create configmap spark-script-config --from-file=src/scripts/spark_streaming.py --namespace data-pipeline
 kubectl apply -f src/spark-script-copy-job.yaml
+
+### Ou bien, lancer le script upload_spark_scripts.sh
+./upload_spark_scripts.sh
 ```
 
 - **Étape 2** : Créer un job Kubernetes pour configurer le schéma Cassandra :
@@ -154,15 +164,20 @@ kubectl apply -f src/cassandra-schema-setup-job.yaml
 - **Étape 3** : Créer un job Kubernetes pour soumettre le job Spark :
 
 ```bash
-docker build -t barryma22/spark-k8s -f src/spark/spark.Dockerfile src/spark
-docker push barryma22/spark-k8s
+# <NomRegistreDockerHub> : Nom de votre régistre sur Docker Hub
+docker build -t <NomRegistreDockerHub>/spark-k8s -f src/spark/spark.Dockerfile src/spark
+docker push <NomRegistreDockerHub>/spark-k8s
+# N'oubliez pas de changer le nom de l'image dans le manifest spark-submit-job.yaml
 kubectl apply -f src/spark-submit-job.yaml
 ```
 
 - **Étape 4** : Automatiser l'exécution avec un CronJob Kubernetes :
 
 ```bash
-./launch-spark-job.sh
+## Selon le DAG que vous avez activé dans l'ui d'airflow
+./launch-spark-job_fake.sh 
+## Ou 
+launch-spark-job_streaming.sh
 ```
 
 #### **10. Nettoyage**
