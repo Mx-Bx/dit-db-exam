@@ -7,8 +7,8 @@
   --conf spark.kubernetes.authenticate.driver.serviceAccountName=spark \
   --conf spark.kubernetes.container.image=spark:spark-kb8 \
   --conf spark.kubernetes.container.image.pullPolicy=IfNotPresent \
-  --conf spark.driver.memory=2g \
-  --conf spark.executor.memory=2g \
+  --conf spark.driver.memory=1g \
+  --conf spark.executor.memory=1g \
   --conf spark.kubernetes.driver.volumes.persistentVolumeClaim.single-access-pvc.mount.path=/mnt/data \
   --conf spark.kubernetes.driver.volumes.persistentVolumeClaim.single-access-pvc.mount.readOnly=false \
   --conf spark.kubernetes.driver.volumes.persistentVolumeClaim.single-access-pvc.options.claimName=single-access-pvc \
