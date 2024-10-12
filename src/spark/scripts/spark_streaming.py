@@ -15,7 +15,7 @@ KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "fake_data")
 CASSANDRA_KEYSPACE = os.getenv("CASSANDRA_KEYSPACE", "spark_streaming")
 CASSANDRA_TABLE = os.getenv("CASSANDRA_TABLE", "fake_person_table")
 CASSANDRA_HOST = os.getenv("CASSANDRA_HOST", "cassandra.data-pipeline.svc.cluster.local")
-CHECKPOINT_LOCATION = os.getenv("CHECKPOINT_LOCATION", "/opt/spark/check_point")
+CHECKPOINT_LOCATION = os.getenv("CHECKPOINT_LOCATION", "/mnt/data/check_point")
 #CHECKPOINT_LOCATION = os.getenv("CHECKPOINT_LOCATION", "/opt/bitnami/spark/check_point")
 
 logger.info(f"Kafka Server: {KAFKA_SERVER}")
